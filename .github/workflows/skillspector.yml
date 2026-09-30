@@ -1,0 +1,56 @@
+name: SkillSpector
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  skillspector:
+    name: SkillSpector agent skill scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install SkillSpector 2.12.0 from NVIDIA
+        run: python -m pip install 'https://github.com/NVIDIA/SkillSpector/archive/c7958a3268d9498644b22edb75d0f051bbc8cbfc.zip'
+      - name: Scan tracked agent skills and instructions
+        shell: python
+        run: |
+          import os
+          import pathlib
+          import subprocess
+          import sys
+
+          paths = [
+              pathlib.Path(os.fsdecode(path))
+              for path in subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
+              if path
+          ]
+          skill_roots = sorted({
+              path.parent for path in paths if path.name.lower() == "skill.md"
+          })
+          instructions = sorted({
+              path for path in paths
+              if path.name.lower() in {"agents.md", "claude.md", "gemini.md"}
+              and not any(root == path.parent or root in path.parents for root in skill_roots)
+          })
+          targets = skill_roots + instructions
+          if not targets:
+              print("No tracked agent skills or instructions found; no scan performed.")
+          failed = False
+          for target in targets:
+              print(f"Scanning {target}", flush=True)
+              result = subprocess.run([
+                  sys.executable, "-c", "from skillspector.cli import app; app()",
+                  "scan", str(target), "--no-llm",
+                  "--fail-on-findings", "--fail-on-incomplete",
+              ])
+              failed = failed or result.returncode != 0
+          sys.exit(1 if failed else 0)
